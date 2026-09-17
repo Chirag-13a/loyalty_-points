@@ -1,0 +1,8 @@
+const mongoose = require('mongoose');
+module.exports = mongoose.model('Transaction', new mongoose.Schema({
+  member: { type: mongoose.Schema.Types.ObjectId, ref: 'Member', required: true },
+  type: { type: String, enum: ['earn', 'redeem', 'expire'], required: true },
+  amount: { type: Number, required: true },
+  points: { type: Number, required: true },
+  description: String
+}, { timestamps: true }));
