@@ -2,6 +2,33 @@
 
 A full-stack MERN loyalty desk for café staff. Members earn points from purchases, move from Bronze to Silver to Gold, and redeem a small catalogue of rewards. The React SPA includes a public landing page, staff authentication, a counter dashboard, member directory, member profile, and public rewards view.
 
+## Tech Stack
+
+- **Frontend:** React, React Router, Tailwind CSS, Axios
+- **Backend:** Node.js, Express, JWT auth, bcrypt
+- **Database:** MongoDB (Mongoose), with automatic fallback to a persistent local JSON store
+
+## Project Structure
+
+```
+client/src/
+├── index.js          # renders <App /> only
+├── App.jsx            # routes only
+├── pages/              # one file per page
+├── components/         # shared UI pieces
+├── context/
+└── api/
+
+server/
+├── server.js
+├── config/
+├── models/
+├── routes/
+├── controllers/
+├── middleware/          # isStaff / isMember role checks
+└── data/store.json      # local fallback store
+```
+
 ## Run locally
 
 Prerequisites: Node.js 18+. MongoDB 6+ is recommended for production, but the app automatically uses the persistent local JSON store at `server/data/store.json` when MongoDB is not installed or cannot be reached.
@@ -16,6 +43,12 @@ npm run dev
 
 Open `http://localhost:5173`. The API runs on `http://localhost:5000`. The first API start seeds the three tiers and four reward items. For a production build, run `npm run build && NODE_ENV=production npm start`.
 
+To seed fuller demo data (sample staff, members, menu items, rewards, offers, and transactions), run:
+
+```bash
+npm run seed
+```
+
 ## Rules
 
 - Base earning rate is 1 point per ₹10 (`POINTS_PER_RUPEE=0.1`). Points are floored to whole points.
@@ -23,6 +56,8 @@ Open `http://localhost:5173`. The API runs on `http://localhost:5000`. The first
 - Silver starts at 500 lifetime points and Gold at 1,500 lifetime points.
 - Lifetime points never decrease. The spendable balance decreases only when a reward is redeemed.
 - Every earn and redemption creates a transaction. Redemption is rejected when the balance is below the reward cost.
+- Members cannot redeem online — redemption is counter-only, performed by staff.
+- Staff and member JWTs are role-checked server-side on every protected route; a member token cannot access staff-only endpoints and vice versa.
 
 ## API endpoints
 
@@ -50,12 +85,25 @@ All member and reward-changing endpoints require `Authorization: Bearer <jwt>` u
 | GET | `/api/member/rewards` | Member-visible visual redemption catalog |
 | POST | `/api/member/redeem` | Redeem a reward using the member token |
 | GET | `/api/member/offers` | Member offers and promotions |
+| GET | `/api/members/me` | Member's own profile |
+| PUT | `/api/members/me` | Update member's own profile (self-scoped by JWT, not by request ID) |
 | GET | `/api/members/me/transactions` | Member-only self-scoped purchase/visit history |
 
 ## Routes
 
-`/` landing page, `/register` and `/login` staff auth, `/dashboard` counter workflow, `/redeem` dedicated reward redemption workflow, `/members` searchable directory, `/members/:id` member profile, `/profile` staff profile, `/logout` logout action, `/catalog` staff reward management, and `/rewards` public tier/reward catalogue. The separate member portal has `/member/login`, `/member/register`, `/member/home`, `/member/redeem` (view-only), `/member/visits`, `/member/menu`, `/member/offers`, and `/member/about`. Staff and member JWTs are role-checked and cannot access each other's protected APIs. Members cannot redeem online; redemption is counter-only.
+`/` landing page, `/register` and `/login` staff auth, `/dashboard` counter workflow, `/redeem` dedicated reward redemption workflow, `/members` searchable directory, `/members/:id` member profile, `/profile` staff profile, `/logout` logout action, `/catalog` staff reward management, and `/rewards` public tier/reward catalogue. The separate member portal has `/member/login`, `/member/register`, `/member/home`, `/member/redeem` (view-only), `/member/visits`, `/member/menu`, `/member/offers`, `/member/profile` (view/edit own details), and `/member/about`. Staff and member JWTs are role-checked and cannot access each other's protected APIs. Members cannot redeem online; redemption is counter-only.
+
+## Demo credentials
+
+After running `npm run seed`, sample login credentials are printed to the console. Typical defaults:
+
+- **Staff:** `admin@cafe.com` / `password123`
+- **Member:** see console output after seeding for a sample phone number / password
 
 ## Debugging
 
 Use `npm run server:dev` and `npm run client:dev` in separate terminals when isolating one side. Check `GET /api/health`, confirm MongoDB is reachable, and inspect the browser network tab for API responses. `npm run build` is the production client check.
+
+## Submission notes
+
+This README is one of three required root files for evaluation, alongside `REASONING.md` (design decisions, testing, and bug fixes) and `AI_LOGS.md` (the complete, unedited AI conversation used to build this project).
