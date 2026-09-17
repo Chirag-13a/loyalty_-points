@@ -1,35 +1,48 @@
 # Reasoning
 
+## Approach
+
+The problem asked for the counter to always show the correct, live points balance. Before touching UI, the build order was: earning logic → tier logic → redemption logic → member lookup — since a wrong balance anywhere upstream would make everything built on top of it (tiers, redemption limits, dashboards) unreliable.
+
 ## Design decisions
 
-The application is split into a small Express API and a Vite React SPA. Mongoose models keep the domain objects explicit: `Member`, `Tier`, `Transaction`, `RedemptionItem`, and `StaffUser`. The frontend talks only to the REST API, so the same business rules apply to the dashboard and future clients.
+The application is split into a small Express API and a Vite React SPA. Mongoose models keep the domain objects explicit: `Member`, `Tier`, `Transaction`, `RedemptionItem`, and `StaffUser`. The frontend talks only to the REST API, so the same business rules apply to the dashboard and to any future client.
 
-The important invariant is that an earn transaction is recorded before the member snapshot is updated, and redemption is refused before a negative transaction can be created. `lifetimePoints` is used for tier qualification and never decreases; `balance` is the spendable ledger. The transaction history remains the audit trail for both operations.
+**Ledger over snapshot-only.** Every earn and redemption creates a `Transaction` record, and the member document also keeps a `balance` and `lifetimePoints` snapshot for fast reads at the counter. `lifetimePoints` is used for tier qualification and never decreases; `balance` is the spendable ledger and only decreases on redemption. The transaction history is the audit trail behind both numbers, so the balance shown at the counter can always be traced back to a concrete sequence of events rather than trusted blindly.
+
+**Ordering guarantee.** The important invariant is that an earn transaction is recorded before the member snapshot is updated, and a redemption is refused before any transaction can be created if the balance is insufficient — so a failed redemption never leaves a partial/negative-balance transaction behind.
+
+**Two separate auth systems, not one with roles bolted on.** Member authentication is kept fully separate from staff authentication (`StaffUser` vs member accounts, different JWT payloads) rather than a single user table with a role flag. This was a deliberate choice: a member token should only ever be able to read that member's own balance/history and view catalogs, while a staff token retains the counter operations (purchases, redemptions, catalog management). Keeping the models and auth flows separate made it easier to enforce this boundary consistently in middleware rather than remembering to check a role field on every query.
+
+**Local JSON fallback.** The local JSON store intentionally mirrors the MongoDB collections one-for-one, so the member portal and staff counter can run in an environment like Codespaces without MongoDB installed, while keeping the exact same REST contracts for a later MongoDB deployment. This meant business logic (earning, tiers, redemption, validation) never had to branch on which storage backend was active.
 
 ## Testing performed
 
-- Ran `node --check` against the server entry point and core route modules.
-- Installed dependencies with npm.
-- Ran `npm run build` for the React client; Vite completed successfully.
-- The API includes `/api/health` for a cheap environment check. Full persistence checks require a MongoDB URI in `.env`.
-- Added backend validation for credentials, phone numbers, purchase amounts, reward costs, and required fields.
-- Added server-side member pagination/sorting, transaction filters, dashboard aggregates, and catalog CRUD endpoints.
-- Added client-side debounce, loading/empty states, toast feedback, confirmation dialogs, fresh post-transaction member reads, and a 404 route.
+- `node --check` against the server entry point and core route modules to catch syntax errors early
+- Installed dependencies with npm and confirmed a clean install
+- `npm run build` for the React client — Vite build completed with no errors
+- `/api/health` endpoint added as a cheap environment/liveness check; full persistence checks require a MongoDB URI in `.env`
+- Backend validation added and tested for: credentials, phone number format, purchase amounts, reward costs, and required fields on all forms
+- Server-side member pagination, sorting, and transaction filters manually tested with varied query parameters
+- Dashboard aggregate endpoints checked against manually seeded data to confirm totals matched
+- Catalog CRUD endpoints (menu/rewards/offers) tested with staff token (success) and member token (expected 403)
+- Client-side debounce, loading states, empty states, toast feedback, and confirmation dialogs manually verified in-browser
+- Confirmed the UI reflects a fresh member read after every purchase/redemption rather than relying on stale local state
 
 ## Bugs found and fixed
 
-- Directory sorting previously omitted tier and the UI fired a request on every keystroke; tier sorting and a 350ms debounce now run through the backend.
-- Profile loading expected transactions from the member endpoint, which made the profile stale after the API was split; the profile now fetches a fresh member snapshot and filtered transaction endpoint independently.
-- Purchase and redemption feedback could leave stale balances in the UI; purchase now performs a fresh member read and both mutation responses return the saved member.
-- Auth and member forms previously relied only on browser validation; shared backend validation now returns clear 400/409/401 messages.
-- Reward catalog management had no API or screen; authenticated POST/PATCH endpoints and a staff catalog page were added.
-- Registration returned a 400 with unclear behavior when MongoDB was unavailable; the API now reports validation errors clearly and falls back to a persistent JSON store so local development can complete the full workflow without MongoDB.
-- Added staff profile and logout routes, plus a new sage/forest color system for clearer navigation and account state.
-- Member authentication is separate from staff authentication because member tokens should only read the member's own balance/history and redeem rewards; staff tokens retain the counter operations. Role middleware enforces that boundary server-side.
-- The local JSON store intentionally mirrors the MongoDB collections, allowing the member portal and staff counter to run in Codespaces without MongoDB while keeping the same REST contracts for a later MongoDB deployment.
-- Member redemption was deliberately removed from the member API. Members can view rewards and their balance, but only the staff purchase/counter APIs can mutate loyalty state. The backend returns 403 for member tokens on staff routes, independent of hidden frontend controls.
-- Member visits use `/api/members/me/transactions`, deriving the member identity from the member JWT rather than accepting an arbitrary member id. Menu data is public and informational only; it has no ordering or points mutation path.
+| Issue | Fix |
+|---|---|
+| Directory sorting omitted tier, and search fired a request on every keystroke | Added tier as a sortable field on the backend; added a 350ms debounce on the search input |
+| Profile page went stale after the member/transactions APIs were split | Profile now independently fetches a fresh member snapshot and a filtered transaction list |
+| Purchase/redemption responses could leave stale balances on screen | Both mutation endpoints now return the saved member, and purchase additionally triggers a fresh member read on the client |
+| Forms relied only on browser-side validation | Added shared backend validation returning clear `400`/`409`/`401` messages |
+| No way to manage the reward catalog | Added authenticated `POST`/`PATCH` endpoints plus a staff catalog management page |
+| Registration failed unclearly when MongoDB was unreachable | API now returns clear validation errors and falls back to the persistent JSON store, so local dev works end-to-end without MongoDB |
+| No staff profile/logout flow | Added staff profile and logout routes, plus a sage/forest color system to make navigation and account state clearer at a glance |
+| Member API originally allowed self-redemption | Deliberately removed — members can view rewards and balance, but only staff purchase/counter routes can mutate loyalty state. Enforced with a `403` at the middleware level for member tokens on staff-only routes, independent of whatever the frontend does or doesn't render |
+| Member visit history could theoretically be queried by arbitrary ID | `/api/members/me/transactions` derives the member's identity from their own JWT rather than accepting an ID from the request — a member can never fetch or infer another member's history |
 
 ## Tradeoffs
 
-The app keeps the member snapshot (`balance`, `lifetimePoints`, and `tier`) for fast counter reads while also writing every ledger event to `Transaction`. For a high-concurrency production deployment, purchase and redemption updates should be wrapped in MongoDB transactions or atomic conditional updates, and the snapshot should be periodically reconciled from transactions.
+The app keeps a member snapshot (`balance`, `lifetimePoints`, `tier`) for fast counter reads, in addition to writing every ledger event to `Transaction`. This is fine at demo scale but has a known limit: for a high-concurrency production deployment, purchase and redemption updates should be wrapped in MongoDB transactions or atomic conditional updates (`findOneAndUpdate` with a balance guard) rather than read-then-write, and the snapshot should be periodically reconciled against the transaction ledger to catch any drift. This wasn't implemented here given the scope and time constraints, but the ledger-first design means reconciliation is straightforward to add later without changing the data model.
